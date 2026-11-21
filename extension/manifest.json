@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "ニコ生 A.I.VOICE 読み上げ",
+  "version": "1.0.0",
+  "description": "ニコニコ生放送のコメントをローカルのA.I.VOICE Editorブリッジ経由でタブごとに読み上げます。",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ニコ生 A.I.VOICE 読み上げ",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://live.nicovideo.jp/watch/*"
+      ],
+      "js": [
+        "inject.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://live.nicovideo.jp/watch/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "world": "ISOLATED",
+      "run_at": "document_start"
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ニコ生 A.I.VOICE 読み上げ</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="title-row">
+        <h1>ニコ生 A.I.VOICE 読み上げ</h1>
+        <div class="header-actions">
+          <button id="connectBtn" type="button" class="btn btn-primary btn-xs">A.I.VOICE接続</button>
+          <button id="refreshBtn" type="button" class="btn btn-secondary btn-xs">更新</button>
+        </div>
+      </div>
+      <div class="status-grid">
+        <div class="status-chip">
+          <span id="bridgeDot" class="dot dot-err"></span>
+          <span id="bridgeStatusText">ブリッジ: 確認中...</span>
+        </div>
+        <div class="status-chip">
+          <span id="editorDot" class="dot dot-err"></span>
+          <span id="editorStatusText">Editor: 未接続</span>
+        </div>
+        <div class="status-chip status-queue">
+          <span id="queueText">キュー: -</span>
+        </div>
+      </div>
+    </header>
+
+    <section id="tabNotice" class="notice hidden">
+      ニコニコ生放送の視聴ページ（live.nicovideo.jp/watch/*）を開くとタブ別設定が有効になります。
+    </section>
+
+    <section id="tabSection" class="card">
+      <div class="card-header">
+        <h2>現在のタブ設定</h2>
+        <label class="switch">
+          <input id="tabEnabled" type="checkbox">
+          <span class="slider-switch"></span>
+          <span id="tabEnabledLabel" class="switch-label">OFF</span>
+        </label>
+      </div>
+
+      <div class="field">
+        <label for="tabVoicePreset">通常コメント 声質</label>
+        <select id="tabVoicePreset"></select>
+      </div>
+
+      <div class="field">
+        <label for="tabOperatorPreset">運営コメント 声質</label>
+        <select id="tabOperatorPreset"></select>
+      </div>
+
+      <div class="field">
+        <div class="field-row">
+          <label for="tabVolume">音量: <span id="tabVolumeVal" class="mono">Editorデフォルト</span></label>
+          <button id="resetVolumeBtn" type="button" class="btn-link">Editorデフォルトを使用</button>
+        </div>
+        <input id="tabVolume" type="range" min="0" max="2" step="0.05" value="1">
+      </div>
+
+      <div class="field">
+        <div class="field-row">
+          <label for="tabSpeed">話速: <span id="tabSpeedVal" class="mono">Editorデフォルト</span></label>
+          <button id="resetSpeedBtn" type="button" class="btn-link">Editorデフォルトを使用</button>
+        </div>
+        <input id="tabSpeed" type="range" min="0.5" max="4" step="0.05" value="1">
+      </div>
+
+      <div class="actions-row">
+        <button id="stopBtn" type="button" class="btn btn-danger">読み上げ停止・キュー消去</button>
+        <button id="clearTabBtn" type="button" class="btn btn-secondary">このタブを消去</button>
+      </div>
+    </section>
+
+    <details id="globalDetails" class="card">
+      <summary class="details-summary">グローバル設定（デフォルト）</summary>
+      <div class="details-body">
+        <label class="check-row">
+          <input id="globalAutoStart" type="checkbox">
+          <span>視聴ページを開いたら自動で読み上げ ON</span>
+        </label>
+
+        <div class="field">
+          <label for="globalDefaultPreset">デフォルト通常コメント 声質</label>
+          <select id="globalDefaultPreset"></select>
+        </div>
+
+        <div class="field">
+          <label for="globalOperatorPreset">デフォルト運営コメント 声質</label>
+          <select id="globalOperatorPreset"></select>
+        </div>
+
+        <label class="check-row">
+          <input id="globalReadGeneral" type="checkbox">
+          <span>通常コメントを読み上げる</span>
+        </label>
+
+        <label class="check-row">
+          <input id="globalReadOperator" type="checkbox">
+          <span>運営・放送者コメントを読み上げる</span>
+        </label>
+
+        <label class="check-row">
+          <input id="globalReplaceUrl" type="checkbox">
+          <span>URL を「URL省略」に置換する</span>
+        </label>
+
+        <div class="two-col">
+          <div class="field">
+            <label for="globalMaxQueue">最大キュー数</label>
+            <input id="globalMaxQueue" type="number" min="1" max="100" step="1">
+          </div>
+          <div class="field">
+            <label for="globalMaxDelay">遅延スキップ (秒)</label>
+            <input id="globalMaxDelay" type="number" min="1" max="300" step="1">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="globalBridgeUrl">ブリッジ URL</label>
+          <div class="url-row">
+            <input id="globalBridgeUrl" type="url" placeholder="http://127.0.0.1:50123">
+            <button id="saveGlobalBtn" type="button" class="btn btn-primary btn-xs">保存</button>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <footer id="feedback" class="feedback" aria-live="polite"></footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
