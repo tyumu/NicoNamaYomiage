@@ -97,17 +97,16 @@
   // Deduplication state
   const SEEN_ID_TTL_MS = 60 * 60 * 1000;
   const SEEN_ID_MAX = 5000;
-  const NETWORK_DOM_MATCH_TTL_MS = 30 * 60 * 1000;
-  const NETWORK_DOM_MATCH_MAX = 2000;
   const DOM_HYDRATION_GRACE_MS = 2500;
 
   const seenIds = new Map();
   const recentTexts = new Map();
-  const networkPendingDomCounts = new Map();
   const seenDomNodes = new WeakSet();
   let observedContainer = null;
   let commentObserver = null;
   let containerScannerTimer = null;
+  let initialLoadRetryCount = 0;
+  let contextInvalidated = false;
 
   // Shadow UI references
   let uiHost = null;
@@ -115,8 +114,7 @@
 
   function pruneMap(map, ttlMs, maxSize) {
     const now = Date.now();
-    for (const [k, entry] of map.entries()) {
-      const ts = typeof entry === 'number' ? entry : entry.updatedAt;
+    for (const [k, ts] of map.entries()) {
       if (now - ts > ttlMs) {
         map.delete(k);
       }
@@ -127,30 +125,13 @@
     }
   }
 
-  function recordNetworkTextForDom(formattedText) {
-    if (!formattedText) return;
-    const now = Date.now();
-    pruneMap(networkPendingDomCounts, NETWORK_DOM_MATCH_TTL_MS, NETWORK_DOM_MATCH_MAX);
-    const prev = networkPendingDomCounts.get(formattedText);
-    networkPendingDomCounts.set(formattedText, {
-      count: prev ? prev.count + 1 : 1,
-      updatedAt: now
-    });
-  }
-
-  function consumeNetworkTextForDom(formattedText) {
-    if (!formattedText) return false;
-    pruneMap(networkPendingDomCounts, NETWORK_DOM_MATCH_TTL_MS, NETWORK_DOM_MATCH_MAX);
-    const entry = networkPendingDomCounts.get(formattedText);
-    if (!entry || entry.count <= 0) {
-      return false;
+  function handleRuntimeError(err) {
+    const msg = (err && err.message) || String(err || '');
+    if (msg.includes('Extension context invalidated') && !contextInvalidated) {
+      contextInvalidated = true;
+      state.tabState.enabled = false;
+      renderOnPageBar();
     }
-    if (entry.count === 1) {
-      networkPendingDomCounts.delete(formattedText);
-    } else {
-      entry.count -= 1;
-    }
-    return true;
   }
 
   function decodeHtmlEntities(str) {
@@ -215,20 +196,12 @@
 
     const textKey = `${isOperator ? 'op' : 'gen'}:${formattedText}`;
 
-    if (source === 'dom' && consumeNetworkTextForDom(formattedText)) {
-      recentTexts.set(textKey, now);
-      return false;
-    }
-
     if (id) {
       if (seenIds.has(id)) {
         return false;
       }
       seenIds.set(id, now);
       recentTexts.set(textKey, now);
-      if (source === 'network') {
-        recordNetworkTextForDom(formattedText);
-      }
       return true;
     }
 
@@ -237,21 +210,15 @@
       return false;
     }
     recentTexts.set(textKey, now);
-    if (source === 'network') {
-      recordNetworkTextForDom(formattedText);
-    }
     return true;
   }
 
-  function recordBacklogComment(id, isOperator, formattedText, source = null) {
+  function recordBacklogComment(id, isOperator, formattedText) {
     const now = Date.now();
     if (id) {
       seenIds.set(id, now);
     }
     recentTexts.set(`${isOperator ? 'op' : 'gen'}:${formattedText}`, now);
-    if (source === 'network') {
-      recordNetworkTextForDom(formattedText);
-    }
   }
 
   function handleCapturedComment({ id, text, isOperator, timestampMs, source }) {
@@ -272,7 +239,7 @@
 
     // Suppress backlog comments older than page load / activation.
     if (typeof timestampMs === 'number' && timestampMs < state.activatedAt - 2000) {
-      recordBacklogComment(id, isOperator, formatted, source);
+      recordBacklogComment(id, isOperator, formatted);
       return;
     }
 
@@ -287,7 +254,7 @@
         isOperator: Boolean(isOperator),
         timestamp: typeof timestampMs === 'number' ? timestampMs : Date.now()
       }
-    }).catch(() => {});
+    }).catch(handleRuntimeError);
   }
 
   function isSystemDomNode(row) {
@@ -478,15 +445,20 @@
     if (!uiElements) return;
 
     const { toggleBtn, toggleText, generalSelect, operatorSelect, statusDot, controlsWrap, collapseBtn } = uiElements;
-    const enabled = Boolean(state.tabState.enabled);
+    const enabled = Boolean(state.tabState.enabled) && !contextInvalidated;
 
     toggleBtn.classList.toggle('is-on', enabled);
-    toggleText.textContent = enabled ? '読み上げ ON' : '読み上げ OFF';
+    toggleText.textContent = contextInvalidated
+      ? '要ページ再読込'
+      : (enabled ? '読み上げ ON' : '読み上げ OFF');
 
     const bridgeOk = Boolean(state.health && state.health.ok);
     const editorOk = Boolean(state.health && state.health.ok && state.health.connected);
     statusDot.classList.remove('is-ok', 'is-warn', 'is-err');
-    if (editorOk) {
+    if (contextInvalidated) {
+      statusDot.classList.add('is-err');
+      statusDot.title = '拡張機能が更新されました。ページを再読み込みしてください';
+    } else if (editorOk) {
       statusDot.classList.add('is-ok');
       statusDot.title = `A.I.VOICE 接続中 (${state.health.hostStatus || 'Connected'})`;
     } else if (bridgeOk) {
@@ -743,9 +715,11 @@
   }
 
   async function loadInitialState() {
+    if (contextInvalidated) return;
     try {
       const res = await chrome.runtime.sendMessage({ type: 'GET_INITIAL_DATA' });
       if (!res || !res.ok) return;
+      initialLoadRetryCount = 0;
       state.tabId = res.tabId;
       if (res.globals) state.globals = res.globals;
       if (res.health) state.health = res.health;
@@ -757,8 +731,12 @@
       } else {
         renderOnPageBar();
       }
-    } catch {
-      // Service worker might be waking up.
+    } catch (err) {
+      handleRuntimeError(err);
+      if (!contextInvalidated && initialLoadRetryCount < 3) {
+        initialLoadRetryCount += 1;
+        setTimeout(loadInitialState, 600 * initialLoadRetryCount);
+      }
     }
   }
 
