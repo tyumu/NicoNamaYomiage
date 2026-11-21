@@ -288,6 +288,7 @@ async function cleanupTab(tabId) {
     return;
   }
   await chrome.storage.session.remove(key);
+  await updateTabBadge(tabId, false);
   await bridgeRequest('/clear', 'POST', { tabId, stopCurrent: true });
 }
 
