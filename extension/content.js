@@ -95,8 +95,15 @@
   };
 
   // Deduplication state
+  const SEEN_ID_TTL_MS = 60 * 60 * 1000;
+  const SEEN_ID_MAX = 5000;
+  const NETWORK_DOM_MATCH_TTL_MS = 30 * 60 * 1000;
+  const NETWORK_DOM_MATCH_MAX = 2000;
+  const DOM_HYDRATION_GRACE_MS = 2500;
+
   const seenIds = new Map();
   const recentTexts = new Map();
+  const networkPendingDomCounts = new Map();
   const seenDomNodes = new WeakSet();
   let observedContainer = null;
   let commentObserver = null;
@@ -108,7 +115,8 @@
 
   function pruneMap(map, ttlMs, maxSize) {
     const now = Date.now();
-    for (const [k, ts] of map.entries()) {
+    for (const [k, entry] of map.entries()) {
+      const ts = typeof entry === 'number' ? entry : entry.updatedAt;
       if (now - ts > ttlMs) {
         map.delete(k);
       }
@@ -117,6 +125,32 @@
       const oldestKey = map.keys().next().value;
       map.delete(oldestKey);
     }
+  }
+
+  function recordNetworkTextForDom(formattedText) {
+    if (!formattedText) return;
+    const now = Date.now();
+    pruneMap(networkPendingDomCounts, NETWORK_DOM_MATCH_TTL_MS, NETWORK_DOM_MATCH_MAX);
+    const prev = networkPendingDomCounts.get(formattedText);
+    networkPendingDomCounts.set(formattedText, {
+      count: prev ? prev.count + 1 : 1,
+      updatedAt: now
+    });
+  }
+
+  function consumeNetworkTextForDom(formattedText) {
+    if (!formattedText) return false;
+    pruneMap(networkPendingDomCounts, NETWORK_DOM_MATCH_TTL_MS, NETWORK_DOM_MATCH_MAX);
+    const entry = networkPendingDomCounts.get(formattedText);
+    if (!entry || entry.count <= 0) {
+      return false;
+    }
+    if (entry.count === 1) {
+      networkPendingDomCounts.delete(formattedText);
+    } else {
+      entry.count -= 1;
+    }
+    return true;
   }
 
   function decodeHtmlEntities(str) {
@@ -176,10 +210,15 @@
 
   function shouldAcceptComment(source, id, isOperator, formattedText) {
     const now = Date.now();
-    pruneMap(seenIds, 60000, 500);
+    pruneMap(seenIds, SEEN_ID_TTL_MS, SEEN_ID_MAX);
     pruneMap(recentTexts, 5000, 300);
 
     const textKey = `${isOperator ? 'op' : 'gen'}:${formattedText}`;
+
+    if (source === 'dom' && consumeNetworkTextForDom(formattedText)) {
+      recentTexts.set(textKey, now);
+      return false;
+    }
 
     if (id) {
       if (seenIds.has(id)) {
@@ -187,6 +226,9 @@
       }
       seenIds.set(id, now);
       recentTexts.set(textKey, now);
+      if (source === 'network') {
+        recordNetworkTextForDom(formattedText);
+      }
       return true;
     }
 
@@ -195,15 +237,21 @@
       return false;
     }
     recentTexts.set(textKey, now);
+    if (source === 'network') {
+      recordNetworkTextForDom(formattedText);
+    }
     return true;
   }
 
-  function recordBacklogComment(id, isOperator, formattedText) {
+  function recordBacklogComment(id, isOperator, formattedText, source = null) {
     const now = Date.now();
     if (id) {
       seenIds.set(id, now);
     }
     recentTexts.set(`${isOperator ? 'op' : 'gen'}:${formattedText}`, now);
+    if (source === 'network') {
+      recordNetworkTextForDom(formattedText);
+    }
   }
 
   function handleCapturedComment({ id, text, isOperator, timestampMs, source }) {
@@ -224,7 +272,7 @@
 
     // Suppress backlog comments older than page load / activation.
     if (typeof timestampMs === 'number' && timestampMs < state.activatedAt - 2000) {
-      recordBacklogComment(id, isOperator, formatted);
+      recordBacklogComment(id, isOperator, formatted, source);
       return;
     }
 
@@ -385,7 +433,7 @@
     }
 
     observedContainer = container;
-    state.domHydrationUntil = Date.now() + 1500;
+    state.domHydrationUntil = Math.max(state.domHydrationUntil, Date.now() + DOM_HYDRATION_GRACE_MS);
     snapshotExistingDomComments(container);
 
     commentObserver = new MutationObserver((mutations) => {
@@ -737,6 +785,15 @@
     }
   });
 
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      // Switching a background tab to the foreground causes React to flush deferred DOM comment rows.
+      // Suppress DOM fallback mutations briefly while network capture continues uninterrupted.
+      state.domHydrationUntil = Math.max(state.domHydrationUntil, Date.now() + DOM_HYDRATION_GRACE_MS);
+      snapshotExistingDomComments(observedContainer);
+    }
+  }
+
   function startDomLifecycle() {
     mountOnPageBar();
     attachCommentObserver();
@@ -748,6 +805,7 @@
     }
   }
 
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   loadInitialState();
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', startDomLifecycle, { once: true });
