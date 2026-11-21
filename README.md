@@ -52,16 +52,13 @@
 ## 1. ブリッジアプリ (`bridge/`) のビルドと起動
 
 1. 先に **A.I.VOICE Editor** を起動しておきます。
-2. ターミナルでリポジトリのルートに移動し、ビルド・起動します。
+2. リポジトリ直下の **`start-bridge.bat` をダブルクリック**すると起動します（未ビルド時は自動で Release ビルドを実行します）。
+   - タスクトレイアイコンの右クリックメニューから **「Windows 起動時に自動実行」** をオンにしておけば、以降は PC 起動時に自動常駐します。
+
+手動でビルド・起動する場合はターミナルから以下を実行します。
 
 ```powershell
 dotnet build bridge/NicoNamaAivoiceBridge.csproj -c Release
-dotnet run --project bridge/NicoNamaAivoiceBridge.csproj -c Release
-```
-
-またはビルド後の実行ファイルを直接起動することもできます。
-
-```powershell
 .\bridge\bin\Release\net9.0-windows\NicoNamaAivoiceBridge.exe
 ```
 
