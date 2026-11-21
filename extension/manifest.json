@@ -5,7 +5,8 @@
   "description": "ニコニコ生放送のコメントをローカルのA.I.VOICE Editorブリッジ経由でタブごとに読み上げます。",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",

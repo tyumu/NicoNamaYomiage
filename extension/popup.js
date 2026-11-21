@@ -13,6 +13,7 @@
   };
 
   const el = {
+    launchBtn: document.getElementById('launchBtn'),
     connectBtn: document.getElementById('connectBtn'),
     refreshBtn: document.getElementById('refreshBtn'),
     bridgeDot: document.getElementById('bridgeDot'),
@@ -235,6 +236,34 @@
   }
 
   function bindEvents() {
+    el.launchBtn.addEventListener('click', async () => {
+      el.launchBtn.disabled = true;
+      showFeedback('ブリッジと A.I.VOICE Editor を起動中...');
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'BRIDGE_LAUNCH' });
+        if (res && res.presets && res.presets.ok) {
+          state.presets = Array.isArray(res.presets.presets) ? res.presets.presets : [];
+          state.masterControl = res.presets.masterControl || null;
+        }
+        if (res && res.health) {
+          renderHealth(res.health);
+        }
+        renderGlobals();
+        renderTabControls();
+        if (res && res.ok) {
+          if (res.health && res.health.connected) {
+            showFeedback('起動して A.I.VOICE Editor に接続しました', 'ok');
+          } else {
+            showFeedback('起動しました（Editor 起動完了後に自動接続されます）', 'ok');
+          }
+        } else {
+          showFeedback((res && res.error) || '起動に失敗しました', 'error');
+        }
+      } finally {
+        el.launchBtn.disabled = false;
+      }
+    });
+
     el.connectBtn.addEventListener('click', async () => {
       el.connectBtn.disabled = true;
       try {

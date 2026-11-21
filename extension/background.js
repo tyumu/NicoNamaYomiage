@@ -1,6 +1,7 @@
 'use strict';
 
 const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:50123';
+const NATIVE_HOST_NAME = 'com.niconama.aivoice_bridge';
 
 const DEFAULT_GLOBAL_SETTINGS = {
   bridgeUrl: DEFAULT_BRIDGE_URL,
@@ -422,6 +423,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           ok: Boolean(connectRes.ok),
           connect: connectRes,
+          health,
+          presets
+        });
+        return;
+      }
+
+      case 'BRIDGE_LAUNCH': {
+        let nativeRes;
+        try {
+          nativeRes = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+            action: 'start',
+            launchEditor: true
+          });
+        } catch (err) {
+          const msg = (err && err.message) || String(err || '');
+          const notRegistered = /not found|forbidden|access|specified native messaging host/i.test(msg);
+          sendResponse({
+            ok: false,
+            notRegistered,
+            error: notRegistered
+              ? 'Native Host が未登録です。register-native-host.bat を1回実行してください。'
+              : msg
+          });
+          return;
+        }
+
+        if (!nativeRes || !nativeRes.ok) {
+          sendResponse({
+            ok: false,
+            error: (nativeRes && nativeRes.error) || '起動に失敗しました'
+          });
+          return;
+        }
+
+        const globals = await getGlobalSettings();
+        let health = null;
+        // Wait briefly for newly started bridge & A.I.VOICE Editor to initialize.
+        for (let i = 0; i < 16; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          health = await bridgeRequest('/health', 'GET', undefined, globals.bridgeUrl);
+          if (health && health.ok && (health.connected || i >= 10)) {
+            break;
+          }
+        }
+
+        if (health && health.ok && !health.connected) {
+          await bridgeRequest('/connect', 'POST', {}, globals.bridgeUrl);
+          health = await bridgeRequest('/health', 'GET', undefined, globals.bridgeUrl);
+        }
+
+        if (health && health.ok) {
+          await syncBridgeConfig(globals);
+        }
+
+        const presets = await bridgeRequest('/presets', 'GET', undefined, globals.bridgeUrl);
+        if (presets && presets.ok) {
+          notifyAllWatchTabs({ type: 'PRESETS_UPDATED', presets });
+        }
+
+        sendResponse({
+          ok: Boolean(health && health.ok),
+          native: nativeRes,
           health,
           presets
         });

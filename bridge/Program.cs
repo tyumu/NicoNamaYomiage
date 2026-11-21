@@ -7,23 +7,33 @@ namespace NicoNamaAivoiceBridge;
 internal static class Program
 {
     [STAThread]
-    private static void Main(string[] args)
+    private static int Main(string[] args)
     {
-        ApplicationConfiguration.Initialize();
-
         var portOverride = ParsePortOverride(args);
         var settings = BridgeSettings.Load();
+
+        if (NativeLauncher.IsNativeMessagingInvocation(args))
+        {
+            return NativeLauncher.Run(settings, portOverride);
+        }
+
+        ApplicationConfiguration.Initialize();
+
         var effectivePort = portOverride ?? settings.Port;
+        var quietIfRunning = args.Any(a => string.Equals(a, "--quiet", StringComparison.OrdinalIgnoreCase));
 
         using var mutex = new Mutex(true, $@"Local\NicoNamaAivoiceBridge_{effectivePort}", out var createdNew);
         if (!createdNew)
         {
-            MessageBox.Show(
-                $"NicoNamaAivoiceBridge は既にポート {effectivePort} で起動しています。",
-                "ニコ生 A.I.VOICE ブリッジ",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-            return;
+            if (!quietIfRunning)
+            {
+                MessageBox.Show(
+                    $"NicoNamaAivoiceBridge は既にポート {effectivePort} で起動しています。",
+                    "ニコ生 A.I.VOICE ブリッジ",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            return 0;
         }
 
         var logger = new AppLogger();
@@ -43,11 +53,12 @@ internal static class Program
                 "ニコ生 A.I.VOICE ブリッジ",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
-            return;
+            return 1;
         }
 
         using var context = new TrayApplicationContext(aiVoice, httpServer, loggerQueue, logger);
         Application.Run(context);
+        return 0;
     }
 
     private static int? ParsePortOverride(string[] args)
