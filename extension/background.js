@@ -19,6 +19,10 @@ const DEFAULT_GLOBAL_SETTINGS = {
 
 const TAB_KEY_PREFIX = 'tab:';
 const BRIDGE_TIMEOUT_MS = 4000;
+const LAUNCH_POLL_TIMEOUT_MS = 60000;
+
+let activeLaunchId = 0;
+let activeLaunchUntil = 0;
 
 function tabStorageKey(tabId) {
   return `${TAB_KEY_PREFIX}${tabId}`;
@@ -227,6 +231,55 @@ async function syncBridgeConfig(globals) {
   }, globals.bridgeUrl);
 }
 
+function startBackgroundLaunchPolling(baseUrl) {
+  const launchId = ++activeLaunchId;
+  const deadline = Date.now() + LAUNCH_POLL_TIMEOUT_MS;
+  activeLaunchUntil = deadline;
+
+  (async () => {
+    let configSynced = false;
+    let attempt = 0;
+
+    while (launchId === activeLaunchId && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (launchId !== activeLaunchId) break;
+
+      const globals = await getGlobalSettings();
+      const targetUrl = baseUrl || globals.bridgeUrl;
+      let health = await bridgeRequest('/health', 'GET', undefined, targetUrl);
+
+      if (health && health.ok && !configSynced) {
+        configSynced = true;
+        syncBridgeConfig(globals).catch(() => {});
+      }
+
+      if (health && health.ok && !health.connected && attempt % 3 === 0) {
+        const connectRes = await bridgeRequest('/connect', 'POST', {}, targetUrl);
+        if (connectRes && connectRes.ok) {
+          health = await bridgeRequest('/health', 'GET', undefined, targetUrl);
+        }
+      }
+      attempt += 1;
+
+      if (health && health.ok && health.connected) {
+        const presets = await bridgeRequest('/presets', 'GET', undefined, targetUrl);
+        if (presets && presets.ok) {
+          notifyAllWatchTabs({ type: 'PRESETS_UPDATED', presets });
+        }
+        break;
+      }
+    }
+
+    if (launchId === activeLaunchId) {
+      activeLaunchUntil = 0;
+    }
+  })().catch(() => {
+    if (launchId === activeLaunchId) {
+      activeLaunchUntil = 0;
+    }
+  });
+}
+
 async function handleSpeakComment(tabId, payload) {
   if (typeof tabId !== 'number' || !payload || typeof payload.text !== 'string') {
     return { ok: false, skipped: true };
@@ -348,7 +401,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           globals,
           tabState,
           health,
-          presets
+          presets,
+          launchPollingRemainingMs: Math.max(0, activeLaunchUntil - Date.now())
         });
         return;
       }
@@ -459,34 +513,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const globals = await getGlobalSettings();
         let health = null;
-        // Wait briefly for newly started bridge & A.I.VOICE Editor to initialize.
-        for (let i = 0; i < 16; i++) {
-          await new Promise((r) => setTimeout(r, 500));
+        // Wait briefly for bridge HTTP server to respond, then continue polling up to 60s.
+        for (let i = 0; i < 4; i++) {
+          await new Promise((r) => setTimeout(r, 400));
           health = await bridgeRequest('/health', 'GET', undefined, globals.bridgeUrl);
-          if (health && health.ok && (health.connected || i >= 10)) {
+          if (health && health.ok) {
+            await syncBridgeConfig(globals);
+            if (!health.connected) {
+              await bridgeRequest('/connect', 'POST', {}, globals.bridgeUrl);
+              health = await bridgeRequest('/health', 'GET', undefined, globals.bridgeUrl);
+            }
             break;
           }
         }
 
-        if (health && health.ok && !health.connected) {
-          await bridgeRequest('/connect', 'POST', {}, globals.bridgeUrl);
-          health = await bridgeRequest('/health', 'GET', undefined, globals.bridgeUrl);
-        }
-
-        if (health && health.ok) {
-          await syncBridgeConfig(globals);
-        }
-
-        const presets = await bridgeRequest('/presets', 'GET', undefined, globals.bridgeUrl);
-        if (presets && presets.ok) {
-          notifyAllWatchTabs({ type: 'PRESETS_UPDATED', presets });
+        let presets = null;
+        if (health && health.ok && health.connected) {
+          presets = await bridgeRequest('/presets', 'GET', undefined, globals.bridgeUrl);
+          if (presets && presets.ok) {
+            notifyAllWatchTabs({ type: 'PRESETS_UPDATED', presets });
+          }
+        } else {
+          startBackgroundLaunchPolling(globals.bridgeUrl);
         }
 
         sendResponse({
-          ok: Boolean(health && health.ok),
+          ok: true,
           native: nativeRes,
           health,
-          presets
+          presets,
+          polling: !(health && health.ok && health.connected),
+          timeoutMs: LAUNCH_POLL_TIMEOUT_MS
         });
         return;
       }

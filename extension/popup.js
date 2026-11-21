@@ -51,12 +51,13 @@
   };
 
   let feedbackTimer = null;
+  let activePollId = 0;
 
-  function showFeedback(text, kind = '') {
+  function showFeedback(text, kind = '', persist = false) {
     el.feedback.textContent = text;
     el.feedback.className = `feedback ${kind ? `is-${kind}` : ''}`;
     clearTimeout(feedbackTimer);
-    if (text) {
+    if (text && !persist) {
       feedbackTimer = setTimeout(() => {
         el.feedback.textContent = '';
         el.feedback.className = 'feedback';
@@ -239,12 +240,62 @@
     renderHealth(res.health);
     renderGlobals();
     renderTabControls();
+
+    if (res.launchPollingRemainingMs > 0 && !(res.health && res.health.ok && res.health.connected)) {
+      pollUntilEditorConnected(res.launchPollingRemainingMs).catch(() => {});
+    }
+  }
+
+  async function pollUntilEditorConnected(timeoutMs = 60000) {
+    const pollId = ++activePollId;
+    const totalSec = Math.max(1, Math.ceil(timeoutMs / 1000));
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
+
+    el.launchBtn.disabled = true;
+    el.launchBannerBtn.disabled = true;
+
+    try {
+      while (pollId === activePollId && Date.now() < deadline) {
+        const elapsedSec = Math.min(totalSec, Math.max(1, Math.floor((Date.now() - startedAt) / 1000)));
+        showFeedback(`A.I.VOICE Editor の起動・接続を待機中... (${elapsedSec}/${totalSec}秒)`, '', true);
+
+        await new Promise((r) => setTimeout(r, 1000));
+        if (pollId !== activePollId) return;
+
+        const health = await chrome.runtime.sendMessage({ type: 'BRIDGE_HEALTH' });
+        renderHealth(health);
+
+        if (health && health.ok && health.connected) {
+          const presetsRes = await chrome.runtime.sendMessage({ type: 'BRIDGE_PRESETS' });
+          if (presetsRes && presetsRes.ok) {
+            state.presets = Array.isArray(presetsRes.presets) ? presetsRes.presets : [];
+            state.masterControl = presetsRes.masterControl || null;
+          }
+          renderGlobals();
+          renderTabControls();
+          showFeedback('起動して A.I.VOICE Editor に接続しました', 'ok');
+          return;
+        }
+      }
+
+      if (pollId === activePollId) {
+        showFeedback(`タイムアウト（${totalSec}秒）：Editor 起動完了後に「接続」を押してください`, 'error');
+      }
+    } finally {
+      if (pollId === activePollId) {
+        el.launchBtn.disabled = false;
+        el.launchBannerBtn.disabled = false;
+      }
+    }
   }
 
   async function handleLaunchClick() {
+    activePollId += 1;
     el.launchBtn.disabled = true;
     el.launchBannerBtn.disabled = true;
-    showFeedback('ブリッジと A.I.VOICE Editor を起動中...');
+    showFeedback('ブリッジと A.I.VOICE Editor を起動中...', '', true);
+    let keepDisabledForPoll = false;
     try {
       const res = await chrome.runtime.sendMessage({ type: 'BRIDGE_LAUNCH' });
       if (res && res.presets && res.presets.ok) {
@@ -256,18 +307,22 @@
       }
       renderGlobals();
       renderTabControls();
+
       if (res && res.ok) {
         if (res.health && res.health.connected) {
           showFeedback('起動して A.I.VOICE Editor に接続しました', 'ok');
         } else {
-          showFeedback('起動しました（Editor 起動完了後に自動接続されます）', 'ok');
+          keepDisabledForPoll = true;
+          await pollUntilEditorConnected(res.timeoutMs || 60000);
         }
       } else {
         showFeedback((res && res.error) || '起動に失敗しました', 'error');
       }
     } finally {
-      el.launchBtn.disabled = false;
-      el.launchBannerBtn.disabled = false;
+      if (!keepDisabledForPoll) {
+        el.launchBtn.disabled = false;
+        el.launchBannerBtn.disabled = false;
+      }
     }
   }
 
