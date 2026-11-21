@@ -1,0 +1,25 @@
+# .NET build artifacts & Visual Studio / IDE files
+bin/
+obj/
+publish/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.cache
+TestResults/
+*.log
+
+# OS / Editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
