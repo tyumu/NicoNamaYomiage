@@ -71,7 +71,8 @@
     '[class*="___text"]'
   ];
 
-  const IGNORED_SUBELEMENT_RE = /(?:name|author|user|number|index|time|date|badge|icon|label|rank|point)/i;
+  const IGNORED_SUBELEMENT_RE = /(?:name|author|user|number|index|time|date|vpos|elapsed|badge|icon|label|rank|point|tooltip|popover|menu|action|control|meta)/i;
+  const IGNORED_ROW_RE = /(?:tooltip|popover|context-menu|hover-menu)/i;
 
   const state = {
     tabId: null,
@@ -91,6 +92,7 @@
     health: null,
     activatedAt: Date.now(),
     domHydrationUntil: 0,
+    networkActive: false,
     collapsed: false
   };
 
@@ -221,7 +223,19 @@
     recentTexts.set(`${isOperator ? 'op' : 'gen'}:${formattedText}`, now);
   }
 
+  function disableDomFallback() {
+    if (commentObserver) {
+      commentObserver.disconnect();
+      commentObserver = null;
+    }
+    observedContainer = null;
+  }
+
   function handleCapturedComment({ id, text, isOperator, timestampMs, source }) {
+    if (source === 'network' && !state.networkActive) {
+      state.networkActive = true;
+      disableDomFallback();
+    }
     if (!state.tabState.enabled) {
       return;
     }
@@ -297,14 +311,23 @@
       }
     }
 
-    // Fallback: clone row and strip metadata sub-elements (username, comment number, timestamp).
+    // Fallback: clone row and strip metadata sub-elements (username, comment number, timestamp, buttons, tooltips).
     const clone = row.cloneNode(true);
     const descendants = clone.querySelectorAll('*');
     for (const child of descendants) {
       const cls = typeof child.className === 'string' ? child.className : '';
       const testId = child.getAttribute('data-testid') || '';
+      const role = child.getAttribute('role') || '';
       const tag = child.tagName;
-      if (tag === 'TIME' || IGNORED_SUBELEMENT_RE.test(cls) || IGNORED_SUBELEMENT_RE.test(testId)) {
+      if (
+        tag === 'TIME' ||
+        tag === 'BUTTON' ||
+        role === 'button' ||
+        role === 'tooltip' ||
+        role === 'menu' ||
+        IGNORED_SUBELEMENT_RE.test(cls) ||
+        IGNORED_SUBELEMENT_RE.test(testId)
+      ) {
         child.remove();
       }
     }
@@ -314,6 +337,12 @@
   function findCommentRows(rootNode) {
     const rows = [];
     if (!(rootNode instanceof Element)) return rows;
+
+    const rootRole = rootNode.getAttribute('role') || '';
+    const rootCls = typeof rootNode.className === 'string' ? rootNode.className : '';
+    if (rootRole === 'tooltip' || rootRole === 'menu' || IGNORED_ROW_RE.test(rootCls)) {
+      return rows;
+    }
 
     const combinedRowSelector = COMMENT_ROW_SELECTORS.join(',');
     if (rootNode.matches(combinedRowSelector)) {
@@ -387,6 +416,9 @@
   }
 
   function attachCommentObserver() {
+    if (state.networkActive) {
+      return;
+    }
     if (observedContainer && document.contains(observedContainer)) {
       return;
     }
@@ -778,7 +810,9 @@
     if (!containerScannerTimer) {
       containerScannerTimer = setInterval(() => {
         mountOnPageBar();
-        attachCommentObserver();
+        if (!state.networkActive) {
+          attachCommentObserver();
+        }
       }, 2000);
     }
   }
