@@ -88,12 +88,9 @@
       volume: null,
       speed: null
     },
-    presets: [],
-    health: null,
     activatedAt: Date.now(),
     domHydrationUntil: 0,
-    networkActive: false,
-    collapsed: false
+    networkActive: false
   };
 
   // Deduplication state
@@ -109,10 +106,6 @@
   let containerScannerTimer = null;
   let initialLoadRetryCount = 0;
   let contextInvalidated = false;
-
-  // Shadow UI references
-  let uiHost = null;
-  let uiElements = null;
 
   function pruneMap(map, ttlMs, maxSize) {
     const now = Date.now();
@@ -132,7 +125,7 @@
     if (msg.includes('Extension context invalidated') && !contextInvalidated) {
       contextInvalidated = true;
       state.tabState.enabled = false;
-      renderOnPageBar();
+      disableDomFallback();
     }
   }
 
@@ -227,6 +220,10 @@
     if (commentObserver) {
       commentObserver.disconnect();
       commentObserver = null;
+    }
+    if (containerScannerTimer) {
+      clearInterval(containerScannerTimer);
+      containerScannerTimer = null;
     }
     observedContainer = null;
   }
@@ -451,291 +448,6 @@
     commentObserver.observe(container, { childList: true, subtree: true });
   }
 
-  function populateSelectOptions(selectEl, presets, selectedValue, defaultLabel) {
-    if (!selectEl) return;
-    selectEl.textContent = '';
-
-    const defaultOpt = document.createElement('option');
-    defaultOpt.value = '';
-    defaultOpt.textContent = defaultLabel;
-    selectEl.appendChild(defaultOpt);
-
-    const list = Array.isArray(presets) ? [...presets] : [];
-    if (selectedValue && !list.includes(selectedValue)) {
-      list.push(selectedValue);
-    }
-    for (const preset of list) {
-      const opt = document.createElement('option');
-      opt.value = preset;
-      opt.textContent = preset;
-      selectEl.appendChild(opt);
-    }
-    selectEl.value = selectedValue || '';
-  }
-
-  function renderOnPageBar() {
-    if (!uiElements) return;
-
-    const { toggleBtn, toggleText, generalSelect, operatorSelect, statusDot, controlsWrap, collapseBtn } = uiElements;
-    const enabled = Boolean(state.tabState.enabled) && !contextInvalidated;
-
-    toggleBtn.classList.toggle('is-on', enabled);
-    toggleText.textContent = contextInvalidated
-      ? '要ページ再読込'
-      : (enabled ? '読み上げ ON' : '読み上げ OFF');
-
-    const bridgeOk = Boolean(state.health && state.health.ok);
-    const editorOk = Boolean(state.health && state.health.ok && state.health.connected);
-    statusDot.classList.remove('is-ok', 'is-warn', 'is-err');
-    if (contextInvalidated) {
-      statusDot.classList.add('is-err');
-      statusDot.title = '拡張機能が更新されました。ページを再読み込みしてください';
-    } else if (editorOk) {
-      statusDot.classList.add('is-ok');
-      statusDot.title = `A.I.VOICE 接続中 (${state.health.hostStatus || 'Connected'})`;
-    } else if (bridgeOk) {
-      statusDot.classList.add('is-warn');
-      statusDot.title = 'ブリッジ接続中 / A.I.VOICE 未接続';
-    } else {
-      statusDot.classList.add('is-err');
-      statusDot.title = 'ブリッジ未接続';
-    }
-
-    populateSelectOptions(generalSelect, state.presets, state.tabState.voicePreset, '通常: デフォルト');
-    populateSelectOptions(operatorSelect, state.presets, state.tabState.operatorVoicePreset, '運営: デフォルト');
-
-    controlsWrap.classList.toggle('is-hidden', state.collapsed);
-    collapseBtn.textContent = state.collapsed ? '▸' : '▾';
-    collapseBtn.title = state.collapsed ? '展開' : '折りたたむ';
-  }
-
-  function makeDraggable(host, handle) {
-    let dragging = false;
-    let startX = 0;
-    let startY = 0;
-    let origLeft = 0;
-    let origTop = 0;
-
-    handle.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      dragging = true;
-      const rect = host.getBoundingClientRect();
-      startX = e.clientX;
-      startY = e.clientY;
-      origLeft = rect.left;
-      origTop = rect.top;
-      host.style.left = `${origLeft}px`;
-      host.style.top = `${origTop}px`;
-      host.style.right = 'auto';
-      e.preventDefault();
-    });
-
-    window.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      const maxLeft = Math.max(0, window.innerWidth - host.offsetWidth);
-      const maxTop = Math.max(0, window.innerHeight - host.offsetHeight);
-      host.style.left = `${Math.min(maxLeft, Math.max(0, origLeft + dx))}px`;
-      host.style.top = `${Math.min(maxTop, Math.max(0, origTop + dy))}px`;
-    });
-
-    window.addEventListener('mouseup', () => {
-      dragging = false;
-    });
-  }
-
-  function mountOnPageBar() {
-    if (uiHost || !document.body) return;
-
-    uiHost = document.createElement('div');
-    uiHost.id = 'nicolive-yomiage-bar-host';
-    uiHost.style.cssText = 'position:fixed;top:60px;right:16px;z-index:2147483640;font-family:sans-serif;';
-
-    const shadow = uiHost.attachShadow({ mode: 'open' });
-    const style = document.createElement('style');
-    style.textContent = `
-      .bar {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 8px;
-        border-radius: 999px;
-        background: rgba(24, 24, 27, 0.88);
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-        color: #f4f4f5;
-        font-size: 12px;
-        line-height: 1;
-        user-select: none;
-      }
-      .drag-handle {
-        cursor: grab;
-        color: #a1a1aa;
-        padding: 2px;
-        font-size: 11px;
-      }
-      .drag-handle:active {
-        cursor: grabbing;
-      }
-      .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #ef4444;
-        flex-shrink: 0;
-      }
-      .status-dot.is-ok { background: #22c55e; }
-      .status-dot.is-warn { background: #f59e0b; }
-      .status-dot.is-err { background: #ef4444; }
-      .toggle-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: #27272a;
-        color: #e4e4e7;
-        border-radius: 999px;
-        padding: 4px 9px;
-        font-size: 11px;
-        font-weight: 600;
-        cursor: pointer;
-        white-space: nowrap;
-      }
-      .toggle-btn.is-on {
-        background: #16a34a;
-        border-color: #22c55e;
-        color: #ffffff;
-      }
-      .controls {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-      }
-      .controls.is-hidden {
-        display: none;
-      }
-      select {
-        max-width: 118px;
-        background: #27272a;
-        color: #f4f4f5;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 6px;
-        padding: 3px 5px;
-        font-size: 11px;
-        outline: none;
-      }
-      .icon-btn {
-        background: transparent;
-        border: none;
-        color: #a1a1aa;
-        cursor: pointer;
-        padding: 2px 4px;
-        font-size: 12px;
-        border-radius: 4px;
-      }
-      .icon-btn:hover {
-        color: #ffffff;
-        background: rgba(255, 255, 255, 0.1);
-      }
-    `;
-
-    const bar = document.createElement('div');
-    bar.className = 'bar';
-
-    const dragHandle = document.createElement('span');
-    dragHandle.className = 'drag-handle';
-    dragHandle.textContent = '⋮⋮';
-    dragHandle.title = 'ドラッグで移動';
-
-    const statusDot = document.createElement('span');
-    statusDot.className = 'status-dot';
-
-    const toggleBtn = document.createElement('button');
-    toggleBtn.type = 'button';
-    toggleBtn.className = 'toggle-btn';
-    const toggleText = document.createElement('span');
-    toggleText.textContent = '読み上げ OFF';
-    toggleBtn.appendChild(toggleText);
-
-    const controlsWrap = document.createElement('div');
-    controlsWrap.className = 'controls';
-
-    const generalSelect = document.createElement('select');
-    generalSelect.title = 'このタブの通常コメント声質';
-
-    const operatorSelect = document.createElement('select');
-    operatorSelect.title = 'このタブの運営コメント声質';
-
-    const refreshBtn = document.createElement('button');
-    refreshBtn.type = 'button';
-    refreshBtn.className = 'icon-btn';
-    refreshBtn.textContent = '↻';
-    refreshBtn.title = 'ブリッジ状態とプリセットを再読込';
-
-    controlsWrap.append(generalSelect, operatorSelect, refreshBtn);
-
-    const collapseBtn = document.createElement('button');
-    collapseBtn.type = 'button';
-    collapseBtn.className = 'icon-btn';
-    collapseBtn.textContent = '▾';
-
-    bar.append(dragHandle, statusDot, toggleBtn, controlsWrap, collapseBtn);
-    shadow.append(style, bar);
-    document.body.appendChild(uiHost);
-
-    uiElements = {
-      toggleBtn,
-      toggleText,
-      generalSelect,
-      operatorSelect,
-      statusDot,
-      controlsWrap,
-      collapseBtn
-    };
-
-    makeDraggable(uiHost, dragHandle);
-
-    toggleBtn.addEventListener('click', () => {
-      const nextEnabled = !state.tabState.enabled;
-      applyTabState({ ...state.tabState, enabled: nextEnabled });
-      chrome.runtime.sendMessage({
-        type: 'UPDATE_TAB_STATE',
-        patch: { enabled: nextEnabled }
-      }).catch(() => {});
-    });
-
-    generalSelect.addEventListener('change', () => {
-      const voicePreset = generalSelect.value;
-      applyTabState({ ...state.tabState, voicePreset });
-      chrome.runtime.sendMessage({
-        type: 'UPDATE_TAB_STATE',
-        patch: { voicePreset }
-      }).catch(() => {});
-    });
-
-    operatorSelect.addEventListener('change', () => {
-      const operatorVoicePreset = operatorSelect.value;
-      applyTabState({ ...state.tabState, operatorVoicePreset });
-      chrome.runtime.sendMessage({
-        type: 'UPDATE_TAB_STATE',
-        patch: { operatorVoicePreset }
-      }).catch(() => {});
-    });
-
-    refreshBtn.addEventListener('click', () => {
-      loadInitialState();
-    });
-
-    collapseBtn.addEventListener('click', () => {
-      state.collapsed = !state.collapsed;
-      renderOnPageBar();
-    });
-
-    renderOnPageBar();
-  }
-
   function applyTabState(nextTabState) {
     const wasEnabled = state.tabState.enabled;
     state.tabState = nextTabState;
@@ -743,7 +455,6 @@
       state.activatedAt = Date.now();
       snapshotExistingDomComments(observedContainer);
     }
-    renderOnPageBar();
   }
 
   async function loadInitialState() {
@@ -754,14 +465,8 @@
       initialLoadRetryCount = 0;
       state.tabId = res.tabId;
       if (res.globals) state.globals = res.globals;
-      if (res.health) state.health = res.health;
-      if (res.presets && res.presets.ok && Array.isArray(res.presets.presets)) {
-        state.presets = res.presets.presets;
-      }
       if (res.tabState) {
         applyTabState(res.tabState);
-      } else {
-        renderOnPageBar();
       }
     } catch (err) {
       handleRuntimeError(err);
@@ -789,9 +494,6 @@
       applyTabState(message.tabState);
     } else if (message.type === 'GLOBALS_UPDATED' && message.globals) {
       state.globals = message.globals;
-    } else if (message.type === 'PRESETS_UPDATED' && message.presets && Array.isArray(message.presets.presets)) {
-      state.presets = message.presets.presets;
-      renderOnPageBar();
     }
   });
 
@@ -805,14 +507,17 @@
   }
 
   function startDomLifecycle() {
-    mountOnPageBar();
+    if (state.networkActive || contextInvalidated) {
+      return;
+    }
     attachCommentObserver();
     if (!containerScannerTimer) {
       containerScannerTimer = setInterval(() => {
-        mountOnPageBar();
-        if (!state.networkActive) {
-          attachCommentObserver();
+        if (state.networkActive || contextInvalidated) {
+          disableDomFallback();
+          return;
         }
+        attachCommentObserver();
       }, 2000);
     }
   }
